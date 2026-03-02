@@ -252,6 +252,43 @@ check_docker() {
     log_success "Docker daemon is running"
 }
 
+check_port_conflicts() {
+    log_info "Checking for port conflicts (80, 443)..."
+    local freed=false
+    for port in 80 443; do
+        local pids
+        pids="$(lsof -nP -t -iTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)"
+        if [ -n "$pids" ]; then
+            local proc_name pid
+            pid="$(echo "$pids" | head -n1)"
+            proc_name="$(ps -p "$pid" -o comm= 2>/dev/null || echo "unknown")"
+            log_warning "Port ${port} in use by '${proc_name}' (PID ${pid}) — killing to free it"
+            echo "$pids" | xargs kill 2>/dev/null || true
+            sleep 1
+            # Force kill if still holding
+            local remaining
+            remaining="$(lsof -nP -t -iTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)"
+            if [ -n "$remaining" ]; then
+                echo "$remaining" | xargs kill -9 2>/dev/null || true
+                sleep 1
+            fi
+            freed=true
+        fi
+    done
+    if $freed; then
+        # Verify ports are actually free now
+        for port in 80 443; do
+            if lsof -nP -t -iTCP:"$port" -sTCP:LISTEN &>/dev/null; then
+                log_error "Port ${port} is still in use after kill attempt. Free it manually and retry."
+                return 1
+            fi
+        done
+        log_success "Freed conflicting ports"
+    else
+        log_success "Ports 80 and 443 are available"
+    fi
+}
+
 # ─── Kind cluster ────────────────────────────────────────────────────────────
 
 create_kind_cluster() {
@@ -716,6 +753,7 @@ main() {
     log_info "Starting AIO GitOps POC (multi-namespace Airflow)..."
     bootstrap_tools             || exit 1
     check_docker                || exit 1
+    check_port_conflicts        || exit 1
     load_kindest_node_image     || true
     create_kind_cluster         || exit 1
     load_all_images             || true
