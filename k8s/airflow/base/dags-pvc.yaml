@@ -1,0 +1,23 @@
+# dags-pvc.yaml
+# Shared PVC for Airflow DAGs — a single git-sync Deployment writes here
+# and all Airflow pods (scheduler, webserver, triggerer) mount it.
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  annotations:
+    # StorageClass `standard` uses WaitForFirstConsumer, so PVC health gates
+    # must be in the same wave as consuming pods to avoid ArgoCD deadlock.
+    argocd.argoproj.io/sync-wave: "3"
+  name: dags-pvc
+  namespace: airflow-core
+  labels:
+    app: airflow
+    part-of: gitops-poc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: "standard"

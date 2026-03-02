@@ -1,0 +1,79 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: airflow-db-migrate
+  namespace: airflow-core
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  ttlSecondsAfterFinished: 3600
+  backoffLimit: 3
+  template:
+    spec:
+      serviceAccountName: airflow-db-migrate
+      restartPolicy: OnFailure
+      nodeSelector:
+        workload: airflow-core
+      tolerations:
+        - key: dedicated
+          operator: Equal
+          value: airflow-core
+          effect: NoSchedule
+      initContainers:
+        - name: wait-for-mysql
+          image: apache/airflow:3.0.0-python3.12
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/bash
+            - -c
+            - |
+              echo "Waiting for MySQL to accept connections..."
+              for i in $(seq 1 60); do
+                python3 -c "
+              import pymysql, os, urllib.parse as u
+              conn_str = os.environ['AIRFLOW__DATABASE__SQL_ALCHEMY_CONN']
+              parts = u.urlparse(conn_str)
+              pymysql.connect(host=parts.hostname, port=parts.port or 3306,
+                              user=parts.username, password=parts.password,
+                              connect_timeout=3)
+              print('MySQL is ready!')
+              " && exit 0
+                echo "  Attempt $i/60 — MySQL not ready, retrying in 5s..."
+                sleep 5
+              done
+              echo "ERROR: MySQL not reachable after 5 minutes"
+              exit 1
+          envFrom:
+            - secretRef:
+                name: airflow-secret
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            runAsNonRoot: true
+            runAsUser: 50000
+      containers:
+        - name: airflow-migrate
+          image: apache/airflow:3.0.0-python3.12
+          imagePullPolicy: IfNotPresent
+          command: ["airflow", "db", "migrate"]
+          envFrom:
+            - secretRef:
+                name: airflow-secret
+          volumeMounts:
+            - name: airflow-logs
+              mountPath: /home/airflow/logs
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            runAsNonRoot: true
+            runAsUser: 50000
+      volumes:
+        - name: airflow-logs
+          emptyDir: {}

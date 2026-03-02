@@ -1,0 +1,501 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+  name: airflow-config
+  namespace: airflow-core
+data:
+  AIRFLOW_HOME: /home/airflow
+  PYTHONPATH: /opt/airflow/custom_logging
+  # Executor — multi-namespace KubernetesExecutor
+  AIRFLOW__CORE__EXECUTOR: KubernetesExecutor
+  AIRFLOW__KUBERNETES_EXECUTOR__NAMESPACE: airflow-user
+  AIRFLOW__KUBERNETES_EXECUTOR__MULTI_NAMESPACE_MODE: "True"
+  AIRFLOW__KUBERNETES_EXECUTOR__MULTI_NAMESPACE_MODE_NAMESPACE_LIST: "airflow-core,airflow-user"
+  AIRFLOW__KUBERNETES_EXECUTOR__POD_TEMPLATE_FILE: /home/airflow/pod_templates/pod_template_user.yaml
+  AIRFLOW__KUBERNETES_EXECUTOR__POD_MUTATION_HOOK: airflow_pod_mutation.namespace_node_pool_mutation_hook
+  AIRFLOW__KUBERNETES_EXECUTOR__IN_CLUSTER: "True"
+  # Keep worker pods for reliable UI log retrieval from KubernetesExecutor tasks.
+  AIRFLOW__KUBERNETES_EXECUTOR__DELETE_WORKER_PODS: "False"
+  AIRFLOW__KUBERNETES_EXECUTOR__DELETE_WORKER_PODS_ON_FAILURE: "False"
+  AIRFLOW__KUBERNETES_EXECUTOR__WORKER_PODS_CREATION_BATCH_SIZE: "1"
+  # DAGs
+  AIRFLOW__CORE__DAGS_FOLDER: /home/airflow/dags/repo/dags
+  AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+  DAG_GIT_SYNC_REPO: https://github.com/UtkarshChakrwarti/remote_airflow.git
+  DAG_GIT_SYNC_REF: main
+  # Execution API (Airflow 3)
+  AIRFLOW__CORE__EXECUTION_API_SERVER_URL: "http://airflow-webserver.airflow-core.svc.cluster.local:8080/execution/"
+  # Logging
+  AIRFLOW__CORE__BASE_LOG_FOLDER: /home/airflow/logs
+  AIRFLOW__LOGGING__LOGGING_CONFIG_CLASS: airflow_logging_config.LOGGING_CONFIG
+  # Database (3.0: AIRFLOW__DATABASE__ replaces deprecated AIRFLOW__CORE__)
+  AIRFLOW__DATABASE__LOAD_DEFAULT_CONNECTIONS: "False"
+  AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_PRE_PING: "True"
+  AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_RECYCLE: "1800"
+  AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_SIZE: "20"
+  AIRFLOW__DATABASE__SQL_ALCHEMY_MAX_OVERFLOW: "10"
+  AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_TIMEOUT: "90"
+  # Webserver / API server
+  AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "False"
+  AIRFLOW__API__AUTH_BACKENDS: "airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session"
+  AIRFLOW__API__WORKERS: "1"
+  # Scheduler - delegate DAG parsing to the standalone dag-processor pod
+  AIRFLOW__SCHEDULER__STANDALONE_DAG_PROCESSOR: "True"
+  AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "True"
+  AIRFLOW__DAG_PROCESSOR__REFRESH_INTERVAL: "30"
+  # Core tuning
+  AIRFLOW__CORE__PARALLELISM: "200"
+  AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "False"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+  name: airflow-pod-template
+  namespace: airflow-core
+data:
+  # Default pod template — tasks run in airflow-user namespace
+  pod_template_user.yaml: |
+    apiVersion: v1
+    kind: Pod
+    metadata:
+      name: airflow-task-pod
+      labels:
+        app: airflow-task
+        managed-by: airflow
+        pool: airflow-user
+        workload-type: on-demand
+    spec:
+      serviceAccountName: airflow-task-sa
+      restartPolicy: Never
+      nodeSelector:
+        workload: airflow-user
+      tolerations:
+        - key: dedicated
+          operator: Equal
+          value: airflow-user
+          effect: NoSchedule
+      securityContext:
+        runAsUser: 50000
+        runAsGroup: 50000
+        fsGroup: 50000
+      initContainers:
+        - name: git-sync-init
+          image: registry.k8s.io/git-sync/git-sync:v4.2.3
+          imagePullPolicy: IfNotPresent
+          args:
+            - --repo=https://github.com/UtkarshChakrwarti/remote_airflow.git
+            - --ref=main
+            - --one-time
+            - --max-failures=-1
+            - --sync-timeout=2m
+            - --link=repo
+            - --root=/git
+          volumeMounts:
+            - name: dags
+              mountPath: /git
+      containers:
+        - name: base
+          image: apache/airflow:3.0.0-python3.12
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: AIRFLOW__CORE__DAGS_FOLDER
+              value: /home/airflow/dags/repo/dags
+            - name: AIRFLOW__CORE__EXECUTION_API_SERVER_URL
+              value: http://airflow-webserver.airflow-core.svc.cluster.local:8080/execution/
+            - name: AIRFLOW__DATABASE__SQL_ALCHEMY_CONN
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-secret
+                  key: AIRFLOW__DATABASE__SQL_ALCHEMY_CONN
+            - name: AIRFLOW__CORE__FERNET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-secret
+                  key: AIRFLOW__CORE__FERNET_KEY
+          volumeMounts:
+            - name: dags
+              mountPath: /home/airflow/dags
+            - name: airflow-logs
+              mountPath: /home/airflow/logs
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            runAsNonRoot: true
+            runAsUser: 50000
+      volumes:
+        - name: dags
+          emptyDir: {}
+        - name: airflow-logs
+          emptyDir: {}
+  # Pod template for tasks running in airflow-core namespace
+  pod_template_core.yaml: |
+    apiVersion: v1
+    kind: Pod
+    metadata:
+      name: airflow-task-pod
+      labels:
+        app: airflow-task
+        managed-by: airflow
+        pool: airflow-core
+        workload-type: scheduled
+    spec:
+      serviceAccountName: airflow-task-sa
+      restartPolicy: Never
+      nodeSelector:
+        workload: airflow-core
+      tolerations:
+        - key: dedicated
+          operator: Equal
+          value: airflow-core
+          effect: NoSchedule
+      securityContext:
+        runAsUser: 50000
+        runAsGroup: 50000
+        fsGroup: 50000
+      initContainers:
+        - name: git-sync-init
+          image: registry.k8s.io/git-sync/git-sync:v4.2.3
+          imagePullPolicy: IfNotPresent
+          args:
+            - --repo=https://github.com/UtkarshChakrwarti/remote_airflow.git
+            - --ref=main
+            - --one-time
+            - --max-failures=-1
+            - --sync-timeout=2m
+            - --link=repo
+            - --root=/git
+          volumeMounts:
+            - name: dags
+              mountPath: /git
+      containers:
+        - name: base
+          image: apache/airflow:3.0.0-python3.12
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: AIRFLOW__CORE__DAGS_FOLDER
+              value: /home/airflow/dags/repo/dags
+            - name: AIRFLOW__CORE__EXECUTION_API_SERVER_URL
+              value: http://airflow-webserver.airflow-core.svc.cluster.local:8080/execution/
+            - name: AIRFLOW__DATABASE__SQL_ALCHEMY_CONN
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-secret
+                  key: AIRFLOW__DATABASE__SQL_ALCHEMY_CONN
+            - name: AIRFLOW__CORE__FERNET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-secret
+                  key: AIRFLOW__CORE__FERNET_KEY
+          volumeMounts:
+            - name: dags
+              mountPath: /home/airflow/dags
+            - name: airflow-logs
+              mountPath: /home/airflow/logs
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            runAsNonRoot: true
+            runAsUser: 50000
+      volumes:
+        - name: dags
+          emptyDir: {}
+        - name: airflow-logs
+          emptyDir: {}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+  name: airflow-custom-logging
+  namespace: airflow-core
+data:
+  airflow_logging_config.py: |
+    """Minimal Airflow logging config with Kubernetes task-log fallback.
+
+    This module intentionally avoids importing ``airflow`` at import time to
+    prevent recursive logging-config initialization in Airflow 3.
+    """
+
+    from __future__ import annotations
+
+
+    LOGGING_CONFIG = {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": {
+            "airflow": {
+                "format": "[%(asctime)s] {%(filename)s:%(lineno)d} %(levelname)s - %(message)s",
+            },
+        },
+        "filters": {
+            "mask_secrets": {
+                "()": "airflow.sdk.execution_time.secrets_masker.SecretsMasker",
+            },
+        },
+        "handlers": {
+            "console": {
+                "class": "airflow.utils.log.logging_mixin.RedirectStdHandler",
+                "formatter": "airflow",
+                "stream": "sys.stdout",
+                "filters": ["mask_secrets"],
+            },
+            "task": {
+                "class": "airflow_logging_k8s_handler.KubernetesPodFallbackTaskHandler",
+                "formatter": "airflow",
+                "base_log_folder": "/home/airflow/logs",
+                "filters": ["mask_secrets"],
+            },
+        },
+        "loggers": {
+            "airflow.task": {
+                "handlers": ["task"],
+                "level": "INFO",
+                "propagate": True,
+                "filters": ["mask_secrets"],
+            },
+            "flask_appbuilder": {
+                "handlers": ["console"],
+                "level": "WARN",
+                "propagate": True,
+            },
+        },
+        "root": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "filters": ["mask_secrets"],
+        },
+    }
+
+    # Airflow loads this symbol from the same module.
+    REMOTE_TASK_LOG = None
+  airflow_logging_k8s_handler.py: |
+    """Kubernetes pod-log fallback for Airflow task log reads."""
+
+    from __future__ import annotations
+
+    import os
+    from typing import Any
+
+    from airflow.utils.log.file_task_handler import FileTaskHandler
+    from kubernetes import client as k8s_client
+    from kubernetes import config as k8s_config
+    from kubernetes.config.config_exception import ConfigException
+
+
+    class KubernetesPodFallbackTaskHandler(FileTaskHandler):
+        """Use Kubernetes API pod logs when served logs are unavailable."""
+
+        _core_v1: k8s_client.CoreV1Api | None = None
+
+        @classmethod
+        def _get_core_v1(cls) -> k8s_client.CoreV1Api:
+            if cls._core_v1 is None:
+                try:
+                    k8s_config.load_incluster_config()
+                except ConfigException:
+                    k8s_config.load_kube_config()
+                cls._core_v1 = k8s_client.CoreV1Api()
+            return cls._core_v1
+
+        @staticmethod
+        def _namespace_from_executor_config(ti: Any) -> str | None:
+            executor_config = getattr(ti, "executor_config", {}) or {}
+            pod_override = executor_config.get("pod_override")
+            if isinstance(pod_override, dict):
+                metadata = pod_override.get("metadata") or {}
+                return metadata.get("namespace")
+            metadata = getattr(pod_override, "metadata", None)
+            return getattr(metadata, "namespace", None)
+
+        @classmethod
+        def _candidate_namespaces(cls, ti: Any) -> list[str]:
+            namespaces: list[str] = []
+            explicit_ns = cls._namespace_from_executor_config(ti)
+            if explicit_ns:
+                namespaces.append(explicit_ns)
+            default_ns = os.getenv("AIRFLOW__KUBERNETES_EXECUTOR__NAMESPACE", "airflow-user")
+            if default_ns:
+                namespaces.append(default_ns)
+            multi_ns = os.getenv(
+                "AIRFLOW__KUBERNETES_EXECUTOR__MULTI_NAMESPACE_MODE_NAMESPACE_LIST",
+                "",
+            )
+            namespaces.extend(ns.strip() for ns in multi_ns.split(",") if ns.strip())
+            return list(dict.fromkeys(namespaces))
+
+        def _read_from_kubernetes_api(self, ti: Any) -> tuple[list[str], list[str]]:
+            pod_name = getattr(ti, "hostname", None)
+            if not pod_name:
+                return [], []
+
+            try:
+                api = self._get_core_v1()
+            except Exception as exc:  # noqa: BLE001
+                return [f"Could not initialize Kubernetes API client: {exc}"], []
+            namespaces = self._candidate_namespaces(ti)
+            last_error: Exception | None = None
+
+            for namespace in namespaces:
+                for container in ("base", None):
+                    try:
+                        log_text = api.read_namespaced_pod_log(
+                            name=pod_name,
+                            namespace=namespace,
+                            container=container,
+                            timestamps=True,
+                            _preload_content=True,
+                        )
+                        if log_text:
+                            source = f"kubernetes://{namespace}/{pod_name}"
+                            if container:
+                                source = f"{source}?container={container}"
+                            return [source], [log_text]
+                    except Exception as exc:  # noqa: BLE001
+                        last_error = exc
+
+            detail = f"Could not read Kubernetes pod logs for pod={pod_name} namespaces={namespaces}"
+            if last_error:
+                detail = f"{detail}: {last_error}"
+            return [detail], []
+
+        def _read_from_logs_server(self, ti: Any, worker_log_rel_path: str) -> tuple[list[str], list[str]]:
+            sources, logs = super()._read_from_logs_server(ti, worker_log_rel_path)
+            if logs:
+                return sources, logs
+
+            # Served logs can fail for KubernetesExecutor pods; use pod logs as fallback.
+            k8s_sources, k8s_logs = self._read_from_kubernetes_api(ti)
+            if k8s_logs:
+                return k8s_sources, k8s_logs
+            return sources + k8s_sources, logs + k8s_logs
+  airflow_namespace_executor.py: |
+    """Namespace-first executor config helpers for KubernetesExecutor DAGs."""
+
+    from __future__ import annotations
+
+    from kubernetes.client import models as k8s
+
+
+    def namespace_executor_config(namespace: str) -> dict:
+        """Return executor_config that routes a task pod to the given namespace."""
+        if not namespace or not namespace.strip():
+            raise ValueError("namespace must be a non-empty string")
+        normalized = namespace.strip()
+
+        node_selector = None
+        tolerations = None
+        if normalized == "airflow-core":
+            node_selector = {"workload": "airflow-core"}
+            tolerations = [
+                k8s.V1Toleration(
+                    key="dedicated",
+                    operator="Equal",
+                    value="airflow-core",
+                    effect="NoSchedule",
+                )
+            ]
+        elif normalized == "airflow-user":
+            node_selector = {"workload": "airflow-user"}
+            tolerations = [
+                k8s.V1Toleration(
+                    key="dedicated",
+                    operator="Equal",
+                    value="airflow-user",
+                    effect="NoSchedule",
+                )
+            ]
+
+        return {
+            "pod_override": k8s.V1Pod(
+                metadata=k8s.V1ObjectMeta(namespace=normalized),
+                spec=k8s.V1PodSpec(
+                    node_selector=node_selector,
+                    tolerations=tolerations,
+                ),
+            )
+        }
+  airflow_pod_mutation.py: |
+    """Mutate KubernetesExecutor pods so namespace determines node pool placement."""
+
+    from __future__ import annotations
+
+    from kubernetes.client import models as k8s
+
+
+    def _dedicated_toleration(pool: str) -> list[k8s.V1Toleration]:
+        return [
+            k8s.V1Toleration(
+                key="dedicated",
+                operator="Equal",
+                value=pool,
+                effect="NoSchedule",
+            )
+        ]
+
+
+    def namespace_node_pool_mutation_hook(pod: k8s.V1Pod) -> k8s.V1Pod:
+        """Enforce nodeSelector/toleration from namespace without DAG boilerplate."""
+        if pod is None or pod.metadata is None or pod.spec is None:
+            return pod
+
+        namespace = (pod.metadata.namespace or "").strip()
+        if namespace == "airflow-core":
+            pod.spec.node_selector = {"workload": "airflow-core"}
+            pod.spec.tolerations = _dedicated_toleration("airflow-core")
+        elif namespace == "airflow-user":
+            pod.spec.node_selector = {"workload": "airflow-user"}
+            pod.spec.tolerations = _dedicated_toleration("airflow-user")
+
+        return pod
+  airflow_local_settings.py: |
+    """Airflow local settings hooks for namespace-driven task pod placement."""
+
+    from __future__ import annotations
+
+    from kubernetes.client import models as k8s
+
+    __all__ = ["pod_mutation_hook"]
+
+
+    def _dedicated_toleration(pool: str) -> list[k8s.V1Toleration]:
+        return [
+            k8s.V1Toleration(
+                key="dedicated",
+                operator="Equal",
+                value=pool,
+                effect="NoSchedule",
+            )
+        ]
+
+
+    def pod_mutation_hook(pod: k8s.V1Pod) -> None:
+        """Namespace decides nodeSelector+toleration for KubernetesExecutor pods."""
+        if pod is None or pod.metadata is None or pod.spec is None:
+            return
+
+        namespace = (pod.metadata.namespace or "").strip()
+        if namespace == "airflow-core":
+            pod.spec.node_selector = {"workload": "airflow-core"}
+            pod.spec.tolerations = _dedicated_toleration("airflow-core")
+        elif namespace == "airflow-user":
+            pod.spec.node_selector = {"workload": "airflow-user"}
+            pod.spec.tolerations = _dedicated_toleration("airflow-user")

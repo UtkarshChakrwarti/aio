@@ -1,0 +1,71 @@
+# dag-sync-deployment.yaml
+# Standalone git-sync that continuously pulls DAGs into the shared PVC.
+# This is the ONLY writer — all Airflow pods read from the same PVC.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+  name: airflow-dag-sync
+  namespace: airflow-core
+spec:
+  replicas: 1
+  revisionHistoryLimit: 1
+  selector:
+    matchLabels:
+      app: airflow-dag-sync
+  template:
+    metadata:
+      annotations:
+        argocd.argoproj.io/sync-wave: "3"
+      labels:
+        app: airflow-dag-sync
+    spec:
+      nodeSelector:
+        workload: airflow-core
+      tolerations:
+        - key: dedicated
+          operator: Equal
+          value: airflow-core
+          effect: NoSchedule
+      containers:
+        - name: git-sync
+          image: registry.k8s.io/git-sync/git-sync:v4.2.3
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: GITSYNC_REPO
+              valueFrom:
+                configMapKeyRef:
+                  name: airflow-config
+                  key: DAG_GIT_SYNC_REPO
+            - name: GITSYNC_REF
+              valueFrom:
+                configMapKeyRef:
+                  name: airflow-config
+                  key: DAG_GIT_SYNC_REF
+          args:
+            - --repo=$(GITSYNC_REPO)
+            - --ref=$(GITSYNC_REF)
+            - --period=30s
+            # Keep serving last-good DAG revision if a sync fails.
+            - --max-failures=-1
+            # Garbage-collect old worktrees after link moves to a new revision.
+            - --stale-worktree-timeout=5m
+            - --sync-timeout=2m
+            - --link=repo
+            - --root=/git
+          volumeMounts:
+            - name: dags
+              mountPath: /git
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "32Mi"
+            limits:
+              cpu: "200m"
+              memory: "128Mi"
+      volumes:
+        - name: dags
+          persistentVolumeClaim:
+            claimName: dags-pvc

@@ -1,0 +1,22 @@
+# logs-pvc.yaml
+# PVC for Airflow logs using dynamic provisioning.
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  annotations:
+    # StorageClass `standard` uses WaitForFirstConsumer, so PVC health gates
+    # must be in the same wave as consuming pods to avoid ArgoCD deadlock.
+    argocd.argoproj.io/sync-wave: "3"
+  name: logs-local-pvc
+  namespace: airflow-core
+  labels:
+    app: airflow
+    part-of: gitops-poc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: "standard"

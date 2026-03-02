@@ -1,0 +1,23 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - namespaces.yaml
+  - serviceaccount.yaml
+  - rbac-cross-namespace.yaml
+  - configmap.yaml
+  - migrate-job.yaml
+  - dags-pvc.yaml
+  - dag-sync-deployment.yaml
+  - webserver-deployment.yaml
+  - scheduler-deployment.yaml
+  - triggerer-deployment.yaml
+  - dag-processor-deployment.yaml
+  - logs-pvc.yaml
+  - webserver-service.yaml
+
+labels:
+  - pairs:
+      app: airflow
+      part-of: gitops-poc
+    includeSelectors: false

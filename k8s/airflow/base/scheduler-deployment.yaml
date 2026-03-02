@@ -1,0 +1,91 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+  name: airflow-scheduler
+  namespace: airflow-core
+spec:
+  replicas: 1
+  revisionHistoryLimit: 1
+  selector:
+    matchLabels:
+      app: airflow-scheduler
+  template:
+    metadata:
+      annotations:
+        argocd.argoproj.io/sync-wave: "3"
+      labels:
+        app: airflow-scheduler
+    spec:
+      serviceAccountName: airflow-scheduler
+      nodeSelector:
+        workload: airflow-core
+      tolerations:
+        - key: dedicated
+          operator: Equal
+          value: airflow-core
+          effect: NoSchedule
+      containers:
+        - name: scheduler
+          image: apache/airflow:3.0.0-python3.12
+          imagePullPolicy: IfNotPresent
+          command: ["airflow", "scheduler"]
+          envFrom:
+            - configMapRef:
+                name: airflow-config
+            - secretRef:
+                name: airflow-secret
+          volumeMounts:
+            - name: airflow-logs
+              mountPath: /home/airflow/logs
+            - name: dags
+              mountPath: /home/airflow/dags
+            - name: custom-logging
+              mountPath: /opt/airflow/custom_logging
+              readOnly: true
+            - name: pod-template
+              mountPath: /home/airflow/pod_templates
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8974
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 5
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8974
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 300m
+              memory: 768Mi
+            limits:
+              cpu: 1200m
+              memory: 1536Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            runAsNonRoot: true
+            runAsUser: 50000
+
+      volumes:
+        - name: airflow-logs
+          persistentVolumeClaim:
+            claimName: logs-local-pvc
+        - name: dags
+          persistentVolumeClaim:
+            claimName: dags-pvc
+        - name: custom-logging
+          configMap:
+            name: airflow-custom-logging
+        - name: pod-template
+          configMap:
+            name: airflow-pod-template

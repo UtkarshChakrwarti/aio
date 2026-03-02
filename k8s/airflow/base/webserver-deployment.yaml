@@ -1,0 +1,102 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+  name: airflow-webserver
+  namespace: airflow-core
+spec:
+  replicas: 1
+  revisionHistoryLimit: 1
+  selector:
+    matchLabels:
+      app: airflow-webserver
+  template:
+    metadata:
+      annotations:
+        argocd.argoproj.io/sync-wave: "3"
+      labels:
+        app: airflow-webserver
+    spec:
+      serviceAccountName: airflow-webserver
+      nodeSelector:
+        workload: airflow-core
+      tolerations:
+        - key: dedicated
+          operator: Equal
+          value: airflow-core
+          effect: NoSchedule
+      containers:
+        - name: webserver
+          image: apache/airflow:3.0.0-python3.12
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          command:
+            - /bin/bash
+            - -c
+            - |
+              echo "{\"admin\":\"${AIRFLOW_ADMIN_PASSWORD}\"}" > /home/airflow/passwords.json
+              exec airflow api-server
+          env:
+            - name: AIRFLOW_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-secret
+                  key: admin-password
+            - name: AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE
+              value: "/home/airflow/passwords.json"
+          envFrom:
+            - configMapRef:
+                name: airflow-config
+            - secretRef:
+                name: airflow-secret
+          volumeMounts:
+            - name: airflow-logs
+              mountPath: /home/airflow/logs
+            - name: dags
+              mountPath: /home/airflow/dags
+            - name: custom-logging
+              mountPath: /opt/airflow/custom_logging
+              readOnly: true
+            - name: pod-template
+              mountPath: /home/airflow/pod_templates
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /public/monitor/health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /public/monitor/health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            runAsNonRoot: true
+            runAsUser: 50000
+
+      volumes:
+        - name: airflow-logs
+          persistentVolumeClaim:
+            claimName: logs-local-pvc
+        - name: dags
+          persistentVolumeClaim:
+            claimName: dags-pvc
+        - name: custom-logging
+          configMap:
+            name: airflow-custom-logging
+        - name: pod-template
+          configMap:
+            name: airflow-pod-template

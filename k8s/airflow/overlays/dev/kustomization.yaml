@@ -1,0 +1,25 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+# No namespace override — namespaces are hardcoded per-resource in base manifests
+# No namePrefix — resources use their actual names for cross-namespace references
+
+labels:
+  - pairs:
+      environment: dev
+    includeSelectors: false
+
+replicas:
+  - name: airflow-webserver
+    count: 1
+  - name: airflow-scheduler
+    count: 1
+  - name: airflow-triggerer
+    count: 1
+  - name: airflow-dag-sync
+    count: 1
+  - name: airflow-dag-processor
+    count: 1

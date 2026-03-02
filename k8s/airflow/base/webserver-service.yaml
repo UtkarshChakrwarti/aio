@@ -1,0 +1,33 @@
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+  name: airflow-webserver
+  namespace: airflow-core
+spec:
+  type: ClusterIP
+  selector:
+    app: airflow-webserver
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+  name: airflow-scheduler
+  namespace: airflow-core
+spec:
+  type: ClusterIP
+  selector:
+    app: airflow-scheduler
+  ports:
+    - name: health
+      port: 8974
+      targetPort: 8974
+      protocol: TCP

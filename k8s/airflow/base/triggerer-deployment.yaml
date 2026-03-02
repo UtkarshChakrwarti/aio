@@ -1,0 +1,79 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+  name: airflow-triggerer
+  namespace: airflow-core
+spec:
+  replicas: 1
+  revisionHistoryLimit: 1
+  selector:
+    matchLabels:
+      app: airflow-triggerer
+  template:
+    metadata:
+      annotations:
+        argocd.argoproj.io/sync-wave: "3"
+      labels:
+        app: airflow-triggerer
+    spec:
+      serviceAccountName: airflow-triggerer
+      nodeSelector:
+        workload: airflow-core
+      tolerations:
+        - key: dedicated
+          operator: Equal
+          value: airflow-core
+          effect: NoSchedule
+      containers:
+        - name: triggerer
+          image: apache/airflow:3.0.0-python3.12
+          imagePullPolicy: IfNotPresent
+          command: ["airflow", "triggerer"]
+          envFrom:
+            - configMapRef:
+                name: airflow-config
+            - secretRef:
+                name: airflow-secret
+          volumeMounts:
+            - name: airflow-logs
+              mountPath: /home/airflow/logs
+            - name: dags
+              mountPath: /home/airflow/dags
+            - name: custom-logging
+              mountPath: /opt/airflow/custom_logging
+              readOnly: true
+          livenessProbe:
+            exec:
+              command:
+                - /bin/bash
+                - -c
+                - "airflow jobs check --job-type TriggererJob"
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 30
+            failureThreshold: 5
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            runAsNonRoot: true
+            runAsUser: 50000
+
+      volumes:
+        - name: airflow-logs
+          persistentVolumeClaim:
+            claimName: logs-local-pvc
+        - name: dags
+          persistentVolumeClaim:
+            claimName: dags-pvc
+        - name: custom-logging
+          configMap:
+            name: airflow-custom-logging

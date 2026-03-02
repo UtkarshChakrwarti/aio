@@ -1,0 +1,18 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+labels:
+  - pairs:
+      environment: dev
+    includeSelectors: false
+
+replicas:
+  - name: kube-state-metrics
+    count: 1
+  - name: prometheus
+    count: 1
+  - name: grafana
+    count: 1

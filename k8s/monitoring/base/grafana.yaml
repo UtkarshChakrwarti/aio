@@ -1,0 +1,542 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+  name: grafana-admin
+  namespace: airflow-core
+type: Opaque
+stringData:
+  admin-user: admin
+  admin-password: admin
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+  name: grafana-datasources
+  namespace: airflow-core
+data:
+  prometheus.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus.airflow-core.svc.cluster.local:9090
+        isDefault: true
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+  name: grafana-dashboard-provider
+  namespace: airflow-core
+data:
+  dashboards.yaml: |
+    apiVersion: 1
+    providers:
+      - name: airflow-k8s
+        orgId: 1
+        folder: Airflow-K8s
+        type: file
+        disableDeletion: false
+        editable: true
+        options:
+          path: /var/lib/grafana/dashboards
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+  name: grafana-dashboard-k8s
+  namespace: airflow-core
+data:
+  airflow-k8s-overview.json: |
+    {
+      "uid": "airflow-platform-command-center",
+      "title": "Airflow Platform Command Center",
+      "datasource": "Prometheus",
+      "tags": ["airflow", "kubernetes", "business", "engineering"],
+      "schemaVersion": 39,
+      "version": 5,
+      "refresh": "15s",
+      "time": {"from": "now-12h", "to": "now"},
+      "panels": [
+        {
+          "id": 1,
+          "type": "stat",
+          "title": "Platform Health Score (%)",
+          "gridPos": {"h": 4, "w": 4, "x": 0, "y": 0},
+          "targets": [
+            {
+              "expr": "100 * ((sum(kube_deployment_status_replicas_available{namespace=\"airflow-core\",deployment=~\"airflow-(scheduler|webserver|triggerer|dag-processor|dag-sync)|grafana|prometheus|kube-state-metrics\"}) + sum(kube_statefulset_status_replicas_ready{namespace=\"mysql\",statefulset=\"dev-mysql\"})) / clamp_min((sum(kube_deployment_spec_replicas{namespace=\"airflow-core\",deployment=~\"airflow-(scheduler|webserver|triggerer|dag-processor|dag-sync)|grafana|prometheus|kube-state-metrics\"}) + sum(kube_statefulset_replicas{namespace=\"mysql\",statefulset=\"dev-mysql\"})), 1))"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "decimals": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {"color": "red", "value": null},
+                  {"color": "orange", "value": 85},
+                  {"color": "green", "value": 97}
+                ]
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 2,
+          "type": "stat",
+          "title": "Airflow Control Plane Availability (%)",
+          "gridPos": {"h": 4, "w": 4, "x": 4, "y": 0},
+          "targets": [
+            {
+              "expr": "100 * sum(kube_deployment_status_replicas_available{namespace=\"airflow-core\",deployment=~\"airflow-(scheduler|webserver|triggerer|dag-processor|dag-sync)\"}) / clamp_min(sum(kube_deployment_spec_replicas{namespace=\"airflow-core\",deployment=~\"airflow-(scheduler|webserver|triggerer|dag-processor|dag-sync)\"}), 1)"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "decimals": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {"color": "red", "value": null},
+                  {"color": "orange", "value": 85},
+                  {"color": "green", "value": 100}
+                ]
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 3,
+          "type": "stat",
+          "title": "Critical Incidents (Pending+Failed Pods)",
+          "gridPos": {"h": 4, "w": 4, "x": 8, "y": 0},
+          "targets": [
+            {
+              "expr": "sum(kube_pod_status_phase{namespace=~\"airflow-core|airflow-user|mysql\",phase=~\"Pending|Failed\"})"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "decimals": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {"color": "green", "value": null},
+                  {"color": "orange", "value": 1},
+                  {"color": "red", "value": 3}
+                ]
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 4,
+          "type": "stat",
+          "title": "Cluster CPU Utilization (%)",
+          "gridPos": {"h": 4, "w": 4, "x": 12, "y": 0},
+          "targets": [
+            {
+              "expr": "100 * sum(rate(container_cpu_usage_seconds_total{container!=\"\",container!=\"POD\"}[5m])) / clamp_min(sum(kube_node_status_allocatable{resource=\"cpu\",unit=\"core\"}), 0.001)"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "decimals": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {"color": "green", "value": null},
+                  {"color": "orange", "value": 70},
+                  {"color": "red", "value": 85}
+                ]
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 5,
+          "type": "stat",
+          "title": "Cluster Memory Utilization (%)",
+          "gridPos": {"h": 4, "w": 4, "x": 16, "y": 0},
+          "targets": [
+            {
+              "expr": "100 * sum(container_memory_working_set_bytes{container!=\"\",container!=\"POD\"}) / clamp_min(sum(kube_node_status_allocatable{resource=\"memory\",unit=\"byte\"}), 1)"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "decimals": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {"color": "green", "value": null},
+                  {"color": "orange", "value": 70},
+                  {"color": "red", "value": 85}
+                ]
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 6,
+          "type": "stat",
+          "title": "Container Restarts (1h)",
+          "gridPos": {"h": 4, "w": 4, "x": 20, "y": 0},
+          "targets": [
+            {
+              "expr": "sum(increase(kube_pod_container_status_restarts_total[1h]))"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "decimals": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {"color": "green", "value": null},
+                  {"color": "orange", "value": 1},
+                  {"color": "red", "value": 5}
+                ]
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 7,
+          "type": "timeseries",
+          "title": "Airflow Component Availability Trend (%)",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+          "targets": [
+            {
+              "expr": "100 * kube_deployment_status_replicas_available{namespace=\"airflow-core\",deployment=~\"airflow-(scheduler|webserver|triggerer|dag-processor|dag-sync)\"} / clamp_min(kube_deployment_spec_replicas{namespace=\"airflow-core\",deployment=~\"airflow-(scheduler|webserver|triggerer|dag-processor|dag-sync)\"}, 1)",
+              "legendFormat": "{{deployment}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "min": 0,
+              "max": 100
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 8,
+          "type": "timeseries",
+          "title": "Critical Pod States by Namespace",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+          "targets": [
+            {
+              "expr": "sum by (namespace, phase) (kube_pod_status_phase{namespace=~\"airflow-core|airflow-user|mysql\",phase=~\"Running|Pending|Failed\"})",
+              "legendFormat": "{{namespace}} {{phase}}"
+            }
+          ],
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom"
+            }
+          }
+        },
+        {
+          "id": 9,
+          "type": "timeseries",
+          "title": "Top CPU Consuming Pods (5m avg cores)",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12},
+          "targets": [
+            {
+              "expr": "topk(15, sum by (namespace, pod) (rate(container_cpu_usage_seconds_total{container!=\"\",container!=\"POD\"}[5m])))",
+              "legendFormat": "{{namespace}}/{{pod}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "cores"
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 10,
+          "type": "timeseries",
+          "title": "Top Memory Consuming Pods",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 12},
+          "targets": [
+            {
+              "expr": "topk(15, sum by (namespace, pod) (container_memory_working_set_bytes{container!=\"\",container!=\"POD\"}))",
+              "legendFormat": "{{namespace}}/{{pod}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "bytes"
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 11,
+          "type": "barchart",
+          "title": "Running Pods by Namespace",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 20},
+          "targets": [
+            {
+              "expr": "sum by (namespace) (kube_pod_status_phase{phase=\"Running\"})",
+              "legendFormat": "{{namespace}}"
+            }
+          ]
+        },
+        {
+          "id": 12,
+          "type": "barchart",
+          "title": "Pressure Pods by Namespace (Pending + Failed)",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 20},
+          "targets": [
+            {
+              "expr": "sum by (namespace) (kube_pod_status_phase{phase=~\"Pending|Failed\"})",
+              "legendFormat": "{{namespace}}"
+            }
+          ]
+        },
+        {
+          "id": 13,
+          "type": "timeseries",
+          "title": "Airflow Component CPU vs Limit (%)",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 28},
+          "targets": [
+            {
+              "expr": "100 * sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=\"airflow-core\",pod=~\"airflow-(scheduler|triggerer|webserver|dag-processor|dag-sync).*\",container!=\"\",container!=\"POD\"}[5m])) / clamp_min(sum by (pod) (kube_pod_container_resource_limits{namespace=\"airflow-core\",pod=~\"airflow-(scheduler|triggerer|webserver|dag-processor|dag-sync).*\",resource=\"cpu\",unit=\"core\"}), 0.001)",
+              "legendFormat": "{{pod}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent"
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 14,
+          "type": "timeseries",
+          "title": "Airflow Component Memory vs Limit (%)",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 28},
+          "targets": [
+            {
+              "expr": "100 * sum by (pod) (container_memory_working_set_bytes{namespace=\"airflow-core\",pod=~\"airflow-(scheduler|triggerer|webserver|dag-processor|dag-sync).*\",container!=\"\",container!=\"POD\"}) / clamp_min(sum by (pod) (kube_pod_container_resource_limits{namespace=\"airflow-core\",pod=~\"airflow-(scheduler|triggerer|webserver|dag-processor|dag-sync).*\",resource=\"memory\",unit=\"byte\"}), 1)",
+              "legendFormat": "{{pod}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent"
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 15,
+          "type": "barchart",
+          "title": "Top Restarting Pods (24h)",
+          "gridPos": {"h": 8, "w": 24, "x": 0, "y": 36},
+          "targets": [
+            {
+              "expr": "topk(20, sum by (namespace, pod) (increase(kube_pod_container_status_restarts_total[24h])))",
+              "legendFormat": "{{namespace}}/{{pod}}"
+            }
+          ]
+        },
+        {
+          "id": 16,
+          "type": "barchart",
+          "title": "Namespace Capacity Commit (CPU cores requested)",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 44},
+          "targets": [
+            {
+              "expr": "sum by (namespace) (kube_pod_container_resource_requests{resource=\"cpu\",unit=\"core\"})",
+              "legendFormat": "{{namespace}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "cores"
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 17,
+          "type": "barchart",
+          "title": "Namespace Capacity Commit (Memory requested)",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 44},
+          "targets": [
+            {
+              "expr": "sum by (namespace) (kube_pod_container_resource_requests{resource=\"memory\",unit=\"byte\"})",
+              "legendFormat": "{{namespace}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "bytes"
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 18,
+          "type": "barchart",
+          "title": "Dedicated Node Pools (taints)",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 52},
+          "targets": [
+            {
+              "expr": "sum by (node, value) (kube_node_spec_taint{key=\"dedicated\",effect=\"NoSchedule\"})",
+              "legendFormat": "{{node}} -> {{value}}"
+            }
+          ]
+        },
+        {
+          "id": 19,
+          "type": "barchart",
+          "title": "Running Pods by Node Pool and Namespace",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 52},
+          "targets": [
+            {
+              "expr": "sum by (value, namespace) (kube_pod_info{namespace=~\"airflow-core|airflow-user|mysql\"} * on (node) group_left(value) kube_node_spec_taint{key=\"dedicated\",effect=\"NoSchedule\"})",
+              "legendFormat": "{{value}} / {{namespace}}"
+            }
+          ]
+        },
+        {
+          "id": 20,
+          "type": "barchart",
+          "title": "Node Labels (workload)",
+          "gridPos": {"h": 8, "w": 24, "x": 0, "y": 60},
+          "targets": [
+            {
+              "expr": "sum by (node, label_workload) (kube_node_labels{label_workload=~\"airflow-core|airflow-user\"})",
+              "legendFormat": "{{node}} -> {{label_workload}}"
+            }
+          ]
+        }
+      ],
+      "templating": {
+        "list": []
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+  name: grafana
+  namespace: airflow-core
+spec:
+  replicas: 1
+  revisionHistoryLimit: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      nodeSelector:
+        workload: airflow-core
+      tolerations:
+        - key: dedicated
+          operator: Equal
+          value: airflow-core
+          effect: NoSchedule
+      containers:
+        - name: grafana
+          image: grafana/grafana:11.1.4
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            - name: GF_SECURITY_ADMIN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-admin
+                  key: admin-user
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-admin
+                  key: admin-password
+            - name: GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH
+              value: /var/lib/grafana/dashboards/airflow-k8s-overview.json
+          volumeMounts:
+            - name: datasources
+              mountPath: /etc/grafana/provisioning/datasources
+            - name: dashboard-provider
+              mountPath: /etc/grafana/provisioning/dashboards
+            - name: dashboards
+              mountPath: /var/lib/grafana/dashboards
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+      volumes:
+        - name: datasources
+          configMap:
+            name: grafana-datasources
+        - name: dashboard-provider
+          configMap:
+            name: grafana-dashboard-provider
+        - name: dashboards
+          configMap:
+            name: grafana-dashboard-k8s
+---
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+  name: grafana
+  namespace: airflow-core
+spec:
+  selector:
+    app: grafana
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000

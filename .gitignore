@@ -1,0 +1,13 @@
+# Auto-installed tool binaries (platform-specific)
+.bin/
+
+# Runtime state (port-forward PIDs, kind config)
+.runtime/
+
+# Generated credential files
+.mysql-credentials.txt
+.airflow-credentials.txt
+.argocd-credentials.txt
+
+# OS files
+.DS_Store
