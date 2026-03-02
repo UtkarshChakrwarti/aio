@@ -490,23 +490,19 @@ EOF
 # ─── Bootstrap Argo CD root app ─────────────────────────────────────────────
 
 bootstrap_argocd() {
-    log_info "Bootstrapping Argo CD root app (REPO_URL=${REPO_URL}, REV=${GIT_REVISION})..."
-    local temp_app
-    temp_app=$(mktemp)
-    sed "s|\${REPO_URL}|${REPO_URL}|g" "$REPO_ROOT/k8s/apps/app-of-apps.yaml" > "$temp_app"
+    log_info "Bootstrapping Argo CD root app (REV=${GIT_REVISION})..."
 
     if kubectl get application root-app -n "$ARGOCD_NAMESPACE" &>/dev/null; then
         kubectl patch application root-app -n "$ARGOCD_NAMESPACE" \
             --type merge \
-            -p "{\"spec\":{\"source\":{\"repoURL\":\"${REPO_URL}\",\"targetRevision\":\"${GIT_REVISION}\"}}}" || {
-            rm "$temp_app"; log_error "Failed to patch root-app"; return 1
+            -p "{\"spec\":{\"source\":{\"targetRevision\":\"${GIT_REVISION}\"}}}" || {
+            log_error "Failed to patch root-app"; return 1
         }
     else
-        kubectl create -n "$ARGOCD_NAMESPACE" -f "$temp_app" || {
-            rm "$temp_app"; log_error "Failed to create root-app"; return 1
+        kubectl create -n "$ARGOCD_NAMESPACE" -f "$REPO_ROOT/k8s/apps/app-of-apps.yaml" || {
+            log_error "Failed to create root-app"; return 1
         }
     fi
-    rm "$temp_app"
     log_success "Argo CD root app bootstrapped"
 }
 
@@ -515,22 +511,17 @@ bootstrap_argocd() {
 patch_child_apps() {
     log_info "Creating/patching child Argo CD apps (REV=${GIT_REVISION})..."
     for app in mysql-app airflow-app monitoring-app; do
-        local temp_app
-        temp_app=$(mktemp)
-        sed "s|\${REPO_URL}|${REPO_URL}|g" "$REPO_ROOT/k8s/apps/${app}.yaml" > "$temp_app"
-
         if kubectl get application "$app" -n "$ARGOCD_NAMESPACE" &>/dev/null; then
             kubectl patch application "$app" -n "$ARGOCD_NAMESPACE" \
                 --type merge \
-                -p "{\"spec\":{\"source\":{\"repoURL\":\"${REPO_URL}\",\"targetRevision\":\"${GIT_REVISION}\"}}}" || {
-                rm "$temp_app"; log_error "Failed to patch ${app}"; return 1
+                -p "{\"spec\":{\"source\":{\"targetRevision\":\"${GIT_REVISION}\"}}}" || {
+                log_error "Failed to patch ${app}"; return 1
             }
         else
-            kubectl create -n "$ARGOCD_NAMESPACE" -f "$temp_app" || {
-                rm "$temp_app"; log_error "Failed to create ${app}"; return 1
+            kubectl create -n "$ARGOCD_NAMESPACE" -f "$REPO_ROOT/k8s/apps/${app}.yaml" || {
+                log_error "Failed to create ${app}"; return 1
             }
         fi
-        rm "$temp_app"
         log_success "  ${app} ready"
     done
 }

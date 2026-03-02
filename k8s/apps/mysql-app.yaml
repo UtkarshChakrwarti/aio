@@ -4,11 +4,11 @@ metadata:
   name: mysql-app
   namespace: argocd
   finalizers:
-    - resources-finalizer.argocd.argoproj.io
+    - resources-finalizer.argocd.argoproj.io/cleanup
 spec:
   project: default
   source:
-    repoURL: ${REPO_URL}
+    repoURL: https://github.com/UtkarshChakrwarti/aio.git
     path: k8s/mysql/overlays/dev
     targetRevision: main
   destination:

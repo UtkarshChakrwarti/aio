@@ -6,7 +6,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: ${REPO_URL}
+    repoURL: https://github.com/UtkarshChakrwarti/aio.git
     path: k8s/apps
     targetRevision: main
   destination:
