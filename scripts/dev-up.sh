@@ -254,32 +254,62 @@ check_docker() {
 
 check_port_conflicts() {
     log_info "Checking for port conflicts (80, 443)..."
-    local freed=false
+    local has_conflict=false
     for port in 80 443; do
         local pids
         pids="$(lsof -nP -t -iTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)"
-        if [ -n "$pids" ]; then
-            local proc_name pid
-            pid="$(echo "$pids" | head -n1)"
-            proc_name="$(ps -p "$pid" -o comm= 2>/dev/null || echo "unknown")"
-            log_warning "Port ${port} in use by '${proc_name}' (PID ${pid}) — killing to free it"
+        [ -z "$pids" ] && continue
+
+        local pid proc_cmdline
+        pid="$(echo "$pids" | head -n1)"
+        proc_cmdline="$(ps -p "$pid" -o args= 2>/dev/null || echo "unknown")"
+
+        # If port is held by Colima/Docker/lima SSH tunnels, the cause is
+        # leftover containers (e.g. a previous Kind cluster). Clean those up
+        # instead of killing the tunnel (which would break Docker).
+        if echo "$proc_cmdline" | grep -qiE 'colima|lima|docker'; then
+            log_warning "Port ${port} held by Docker/Colima — cleaning up leftover containers..."
+            # Remove any old Kind cluster that may still be forwarding ports
+            local old_clusters
+            old_clusters="$(kind get clusters 2>/dev/null || true)"
+            if [ -n "$old_clusters" ]; then
+                while IFS= read -r cluster; do
+                    [ -n "$cluster" ] || continue
+                    log_warning "  Deleting leftover Kind cluster: ${cluster}"
+                    kind delete cluster --name "$cluster" 2>/dev/null || true
+                done <<< "$old_clusters"
+                sleep 2
+            fi
+            # Also stop any stray Docker containers binding these ports
+            local container_id
+            container_id="$(docker ps --format '{{.ID}} {{.Ports}}' 2>/dev/null \
+                | grep ":${port}->" | awk '{print $1}' || true)"
+            if [ -n "$container_id" ]; then
+                log_warning "  Stopping container ${container_id} on port ${port}"
+                docker stop "$container_id" 2>/dev/null || true
+                docker rm -f "$container_id" 2>/dev/null || true
+                sleep 1
+            fi
+        else
+            # Non-Docker process — safe to kill
+            log_warning "Port ${port} in use by '${proc_cmdline}' (PID ${pid}) — killing to free it"
             echo "$pids" | xargs kill 2>/dev/null || true
             sleep 1
-            # Force kill if still holding
             local remaining
             remaining="$(lsof -nP -t -iTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)"
             if [ -n "$remaining" ]; then
                 echo "$remaining" | xargs kill -9 2>/dev/null || true
                 sleep 1
             fi
-            freed=true
         fi
+        has_conflict=true
     done
-    if $freed; then
-        # Verify ports are actually free now
+
+    if $has_conflict; then
         for port in 80 443; do
             if lsof -nP -t -iTCP:"$port" -sTCP:LISTEN &>/dev/null; then
-                log_error "Port ${port} is still in use after kill attempt. Free it manually and retry."
+                log_error "Port ${port} is still in use. Free it manually and retry."
+                log_error "  Tip: lsof -iTCP:${port} -sTCP:LISTEN"
                 return 1
             fi
         done
